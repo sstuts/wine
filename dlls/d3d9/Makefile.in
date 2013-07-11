@@ -1,6 +1,6 @@
 MODULE    = d3d9.dll
 IMPORTLIB = d3d9
-IMPORTS   = dxguid uuid wined3d
+IMPORTS   = dxguid uuid advapi32 wined3d
 
 C_SRCS = \
 	buffer.c \
