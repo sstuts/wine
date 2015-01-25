@@ -97,6 +97,9 @@ struct DRI3Present
     HCURSOR hCursor;
 
     DEVMODEW initial_mode;
+    LONG prev_windowStyle;
+    LONG prev_windowExStyle;
+    HWND prev_window;
 };
 
 struct D3DWindowBuffer
@@ -104,6 +107,18 @@ struct D3DWindowBuffer
     PRESENTPixmapPriv *present_pixmap_priv;
 };
 
+typedef struct d3dadapter_wndproc_ll_s {
+    struct d3dadapter_wndproc_ll_s * prev;
+    struct d3dadapter_wndproc_ll_s * next;
+    WNDPROC oldProc;
+    BOOLEAN unicode;
+    HWND hwnd;
+    struct DRI3Present * present;
+} d3dadapter_wndproc_ll_t;
+
+static d3dadapter_wndproc_ll_t * d3dadapter_wndproc_ll = NULL;
+void d3dadapter_register_wndproc(HWND hwnd, struct DRI3Present * present);
+void d3dadapter_unregister_wndproc(HWND hwnd);
 static void
 free_d3dadapter_drawable(struct d3d_drawable *d3d)
 {
@@ -212,12 +227,26 @@ DRI3Present_AddRef( struct DRI3Present *This )
 static ULONG WINAPI
 DRI3Present_Release( struct DRI3Present *This )
 {
+    int deleted_ll = 1;
     ULONG refs = InterlockedDecrement(&This->refs);
     TRACE("%p decreasing refcount to %u.\n", This, refs);
     if (refs == 0) {
         /* dtor */
         ChangeDisplaySettingsExW(This->devname, &(This->initial_mode), 0, CDS_FULLSCREEN, NULL);
         PRESENTDestroy(gdi_display, This->present_priv);
+        while ( deleted_ll ) {/* A bit inefficient , but it works on very small dataset */
+            d3dadapter_wndproc_ll_t * entry = d3dadapter_wndproc_ll;
+            deleted_ll = 0;
+            while ( entry ) {
+                if ( entry->present == This ) {
+                    d3dadapter_unregister_wndproc(entry->hwnd);
+                    deleted_ll = 1;
+                    break;
+                }
+                entry = entry->next;
+            }
+            
+        }
 #ifdef D3DADAPTER9_DRI2
         if (is_dri2_fallback)
             DRI2FallbackDestroy(This->dri2_priv);
@@ -563,6 +592,145 @@ static ID3DPresentVtbl DRI3Present_vtable = {
     (void *)DRI3Present_GetWindowInfo
 };
 
+/**
+ * @brief Get d3dadapter wndproc entry
+ * 
+ * @param hwnd The window for which the wndproc entry is needed
+ * @return The wndproc entry containing unicode mode and old wndproc, NULL if not registered
+ */
+
+d3dadapter_wndproc_ll_t * d3dadapter_get_wndprocentry(HWND hwnd)
+{
+    d3dadapter_wndproc_ll_t * entry = d3dadapter_wndproc_ll;
+    while ( entry ) {
+        if ( entry->hwnd == hwnd )
+            return entry;
+        entry = entry->next;
+    }
+    return entry; /* NULL */
+}
+
+static LRESULT CALLBACK d3dadapter_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    d3dadapter_wndproc_ll_t * entry = d3dadapter_get_wndprocentry(hwnd);
+    if (!entry) {
+        ERR("Received message from non-registered window\n");
+        return 1;
+    }
+    
+    if ( message == WM_ACTIVATEAPP ) {
+        if ( wparam ) { /* Window is going to be displayed */
+            if ( 1  /*!(entry->present-> & D3DCREATE_NOWINDOWCHANGES) TODO: Can't access d3dcreate flags? */ )
+            {
+                /* The d3d versions do not agree on the exact messages here. D3d8 restores
+                * the window but leaves the size untouched, d3d9 sets the size on an
+                * invisible window, generates messages but doesn't change the window
+                * properties. The implementation follows d3d9.
+                *
+                * Guild Wars 1 wants a WINDOWPOSCHANGED message on the device window to
+                * resume drawing after a focus loss. */
+                DEVMODEW newMode;
+                newMode.dmPelsWidth = entry->present->params.BackBufferWidth;
+                newMode.dmPelsHeight = entry->present->params.BackBufferHeight;
+                newMode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+                ChangeDisplaySettingsExW(entry->present->devname, &newMode, 0, CDS_FULLSCREEN, NULL);
+                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_STYLE, fullscreen_style(0));
+                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_EXSTYLE, fullscreen_exstyle(0));
+                SetWindowPos(entry->present->params.hDeviceWindow, NULL, 0, 0,
+                        entry->present->params.BackBufferWidth, entry->present->params.BackBufferHeight,
+                        SWP_NOACTIVATE | SWP_NOZORDER);
+                
+            }
+                
+        }else{ /* The user or the program switched to another window */
+            
+            if ( 1  /*!(entry->present-> & D3DCREATE_NOWINDOWCHANGES) TODO: Can't access d3dcreate flags? */ && IsWindowVisible(entry->present->params.hDeviceWindow)) {
+                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_STYLE, entry->present->prev_windowStyle);
+                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_EXSTYLE, entry->present->prev_windowExStyle);
+                ShowWindow(entry->present->params.hDeviceWindow, SW_FORCEMINIMIZE);
+            }
+            ChangeDisplaySettingsExW(entry->present->devname, &(entry->present->initial_mode), 0, CDS_FULLSCREEN, NULL);
+        }
+        
+    }
+    if ( message == WM_DESTROY ) {
+        d3dadapter_unregister_wndproc(hwnd);
+        return 0;
+    }
+    
+    
+    if (entry->unicode)
+        return CallWindowProcW(entry->oldProc, hwnd, message, wparam, lparam);
+    else
+        return CallWindowProcA(entry->oldProc, hwnd, message, wparam, lparam);
+}
+/**
+ * @brief Change the wndproc of the specified window to d3dadapter one, and save on a list the previous one
+ * 
+ * @param hwnd Window to register
+ * @param present Pointer to DRI3Present structure to which this window belongs to
+ * @return void
+ */
+void d3dadapter_register_wndproc(HWND hwnd, struct DRI3Present * present)
+{
+    d3dadapter_wndproc_ll_t * entry = NULL;
+    if ( ( !IsWindowUnicode(hwnd) && d3dadapter_wndproc == (WNDPROC)GetWindowLongPtrA(hwnd, GWLP_WNDPROC) ) ||
+        ( IsWindowUnicode(hwnd) && d3dadapter_wndproc == (WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) ) )
+    {
+        ERR("Window %p already registered\n",hwnd);
+        return;
+    }
+    entry = HeapAlloc(GetProcessHeap(),0,sizeof(d3dadapter_wndproc_ll_t));
+    entry->unicode = IsWindowUnicode(hwnd);
+    if ( entry->unicode )
+        entry->oldProc = (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)d3dadapter_wndproc);
+    else
+        entry->oldProc = (WNDPROC)SetWindowLongPtrA(hwnd, GWLP_WNDPROC, (LONG_PTR)d3dadapter_wndproc);
+    entry->present = present; /* The window should no longer be in the list when present is destroyed */
+    entry->hwnd = hwnd;
+    entry->next = d3dadapter_wndproc_ll;
+    entry->prev = NULL;
+    if ( d3dadapter_wndproc_ll ) { 
+        d3dadapter_wndproc_ll->prev = entry;
+    }
+    d3dadapter_wndproc_ll = entry;
+}
+
+
+/**
+ * @brief Unregister the specified window from d3dadapter and remove it from list
+ * 
+ * @param hwnd Window to unregister
+ * @return void
+ */
+void d3dadapter_unregister_wndproc(HWND hwnd)
+{
+    d3dadapter_wndproc_ll_t * entry = d3dadapter_get_wndprocentry(hwnd);
+    d3dadapter_wndproc_ll_t * prev;
+    d3dadapter_wndproc_ll_t * next;
+    if (!entry) {
+        ERR("Tried to unregister non-registered window\n");
+        return;
+    }
+    prev = entry->prev;
+    next = entry->next;
+    if (prev){
+        prev->next = next;
+    }else{ /* head */
+        d3dadapter_wndproc_ll = next;
+    }
+    if (next){
+        next->prev = prev;
+    }
+    if ( entry->unicode )
+        SetWindowLongPtrW(entry->hwnd, GWLP_WNDPROC, (LONG_PTR)entry->oldProc);
+    else
+        SetWindowLongPtrA(entry->hwnd, GWLP_WNDPROC, (LONG_PTR)entry->oldProc);
+    HeapFree(GetProcessHeap(), 0, entry);
+}
+
+
+
 static void
 DRI3Present_ChangePresentParameters( struct DRI3Present *This,
                                     D3DPRESENT_PARAMETERS *params,
@@ -576,6 +744,19 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
     /* sanitize presentation parameters */
     draw_window = params->hDeviceWindow ? params->hDeviceWindow : This->focus_wnd;
 
+    if (!first_time) {
+        if (draw_window != This->prev_window && !This->params.Windowed) { /* Window changed, if fullscreen restore parameters */
+            SetWindowLongW(This->prev_window, GWL_STYLE, This->prev_windowStyle);
+            SetWindowLongW(This->prev_window, GWL_EXSTYLE, This->prev_windowExStyle);
+            d3dadapter_unregister_wndproc(This->prev_window);
+        }
+        if (draw_window == This->prev_window && params->Windowed && !This->params.Windowed) {/* Same window , going back to windowed */
+            SetWindowLongW(draw_window, GWL_STYLE, This->prev_windowStyle);
+            SetWindowLongW(draw_window, GWL_EXSTYLE, This->prev_windowExStyle);
+            d3dadapter_unregister_wndproc(This->focus_wnd);
+        }
+    }
+    
     if (!GetClientRect(draw_window, &rect)) {
         WARN("GetClientRect failed.\n");
         rect.right = 640;
@@ -602,13 +783,22 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
         style = fullscreen_style(0);
         exstyle = fullscreen_exstyle(0);
 
+        if ((first_time && !params->Windowed) || 
+            (!first_time && ( This->params.Windowed && !params->Windowed))) { 
+            /* Store style only on first time full screen and on windowed->fullscreen switch, not mode change */
+            This->prev_windowStyle = GetWindowLongW(draw_window, GWL_STYLE);
+            This->prev_windowExStyle = GetWindowLongW(draw_window, GWL_EXSTYLE);
+            d3dadapter_register_wndproc(This->focus_wnd, This);
+            SetWindowPos(This->focus_wnd ? This->focus_wnd : params->hDeviceWindow, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE); /* Send WM_WINDOWPOSCHANGING */
+        }
         SetWindowLongW(draw_window, GWL_STYLE, style);
         SetWindowLongW(draw_window, GWL_EXSTYLE, exstyle);
-        SetWindowPos(draw_window, HWND_TOPMOST, 0, 0, params->BackBufferWidth, params->BackBufferHeight, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        SetWindowPos(draw_window, HWND_TOPMOST, 0, 0, params->BackBufferWidth, params->BackBufferHeight, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);   
     } else if (!first_time && !This->params.Windowed)
         ChangeDisplaySettingsExW(This->devname, &(This->initial_mode), 0, CDS_FULLSCREEN, NULL);
 
     This->params = *params;
+    This->prev_window = draw_window;
 }
 
 static HRESULT
@@ -636,7 +826,7 @@ DRI3Present_new( Display *dpy,
     This->vtable = &DRI3Present_vtable;
     This->refs = 1;
     This->focus_wnd = focus_wnd;
-
+    This->prev_window = This->focus_wnd;
     strcpyW(This->devname, devname);
 
     ZeroMemory(&(This->initial_mode), sizeof(This->initial_mode));
