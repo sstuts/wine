@@ -610,6 +610,13 @@ d3dadapter_wndproc_ll_t * d3dadapter_get_wndprocentry(HWND hwnd)
     return entry; /* NULL */
 }
 
+void d3dadapter_set_window_fullscreen(HWND hwnd, int width, int height)
+{
+    SetWindowLongW(hwnd, GWL_STYLE, fullscreen_style(GetWindowLongW(hwnd, GWL_STYLE)));
+    SetWindowLongW(hwnd, GWL_EXSTYLE, fullscreen_exstyle(GetWindowLongW(hwnd, GWL_EXSTYLE)));
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE); 
+}
+
 static LRESULT CALLBACK d3dadapter_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
     d3dadapter_wndproc_ll_t * entry = d3dadapter_get_wndprocentry(hwnd);
@@ -620,6 +627,7 @@ static LRESULT CALLBACK d3dadapter_wndproc(HWND hwnd, UINT message, WPARAM wpara
     
     if ( message == WM_ACTIVATEAPP ) {
         if ( wparam ) { /* Window is going to be displayed */
+
             if ( 1  /*!(entry->present-> & D3DCREATE_NOWINDOWCHANGES) TODO: Can't access d3dcreate flags? */ )
             {
                 /* The d3d versions do not agree on the exact messages here. D3d8 restores
@@ -633,13 +641,10 @@ static LRESULT CALLBACK d3dadapter_wndproc(HWND hwnd, UINT message, WPARAM wpara
                 newMode.dmPelsWidth = entry->present->params.BackBufferWidth;
                 newMode.dmPelsHeight = entry->present->params.BackBufferHeight;
                 newMode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-                ChangeDisplaySettingsExW(entry->present->devname, &newMode, 0, CDS_FULLSCREEN, NULL);
-                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_STYLE, fullscreen_style(0));
-                SetWindowLongW(entry->present->params.hDeviceWindow, GWL_EXSTYLE, fullscreen_exstyle(0));
-                SetWindowPos(entry->present->params.hDeviceWindow, NULL, 0, 0,
-                        entry->present->params.BackBufferWidth, entry->present->params.BackBufferHeight,
-                        SWP_NOACTIVATE | SWP_NOZORDER);
+                newMode.dmSize = sizeof(DEVMODEW);
                 
+                ChangeDisplaySettingsExW(entry->present->devname, &newMode, 0, CDS_FULLSCREEN, NULL);
+                d3dadapter_set_window_fullscreen(entry->present->params.hDeviceWindow, entry->present->params.BackBufferWidth, entry->present->params.BackBufferHeight);
             }
                 
         }else{ /* The user or the program switched to another window */
@@ -778,6 +783,7 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
         newMode.dmPelsWidth = params->BackBufferWidth;
         newMode.dmPelsHeight = params->BackBufferHeight;
         newMode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        newMode.dmSize = sizeof(DEVMODEW);
         ChangeDisplaySettingsExW(This->devname, &newMode, 0, CDS_FULLSCREEN, NULL);
 
         style = fullscreen_style(0);
@@ -791,9 +797,7 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
             d3dadapter_register_wndproc(This->focus_wnd, This);
             SetWindowPos(This->focus_wnd ? This->focus_wnd : params->hDeviceWindow, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE); /* Send WM_WINDOWPOSCHANGING */
         }
-        SetWindowLongW(draw_window, GWL_STYLE, style);
-        SetWindowLongW(draw_window, GWL_EXSTYLE, exstyle);
-        SetWindowPos(draw_window, HWND_TOPMOST, 0, 0, params->BackBufferWidth, params->BackBufferHeight, SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);   
+        d3dadapter_set_window_fullscreen(draw_window, params->BackBufferWidth, params->BackBufferHeight);
     } else if (!first_time && !This->params.Windowed)
         ChangeDisplaySettingsExW(This->devname, &(This->initial_mode), 0, CDS_FULLSCREEN, NULL);
 
