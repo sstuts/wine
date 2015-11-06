@@ -1410,6 +1410,7 @@ static void test_lost_device(void)
     HRESULT hr;
     BOOL ret;
     struct device_desc desc;
+    IDirect3DSwapChain9 *swapchain;
 
     window = CreateWindowA("static", "d3d9_test", WS_OVERLAPPEDWINDOW,
             0, 0, 640, 480, NULL, NULL, NULL, NULL);
@@ -1434,6 +1435,12 @@ static void test_lost_device(void)
     hr = IDirect3DDevice9Ex_CheckDeviceState(device, NULL);
     ok(hr == S_PRESENT_OCCLUDED, "Got unexpected hr %#x.\n", hr);
 
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
+
     ret = SetForegroundWindow(GetDesktopWindow());
     ok(ret, "Failed to set foreground window.\n");
     hr = IDirect3DDevice9Ex_TestCooperativeLevel(device);
@@ -1447,6 +1454,12 @@ static void test_lost_device(void)
     hr = IDirect3DDevice9Ex_CheckDeviceState(device, NULL);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
 
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == S_PRESENT_OCCLUDED, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
+
     ret = SetForegroundWindow(window);
     ok(ret, "Failed to set foreground window.\n");
     hr = IDirect3DDevice9Ex_TestCooperativeLevel(device);
@@ -1459,6 +1472,12 @@ static void test_lost_device(void)
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
     hr = IDirect3DDevice9Ex_CheckDeviceState(device, NULL);
     ok(hr == S_PRESENT_OCCLUDED, "Got unexpected hr %#x.\n", hr);
+
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
 
     desc.width = 1024;
     desc.height = 768;
@@ -1489,6 +1508,12 @@ static void test_lost_device(void)
     hr = IDirect3DDevice9Ex_CheckDeviceState(device, NULL);
     todo_wine ok(hr == S_PRESENT_MODE_CHANGED, "Got unexpected hr %#x.\n", hr);
 
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == S_PRESENT_MODE_CHANGED, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
+
     hr = reset_device(device, &desc);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
     hr = IDirect3DDevice9Ex_TestCooperativeLevel(device);
@@ -1501,6 +1526,12 @@ static void test_lost_device(void)
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
     hr = IDirect3DDevice9Ex_CheckDeviceState(device, NULL);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
 
     ret = SetForegroundWindow(GetDesktopWindow());
     ok(ret, "Failed to set foreground window.\n");
