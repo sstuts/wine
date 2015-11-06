@@ -8222,16 +8222,18 @@ done:
 
 static void test_vidmem_accounting(void)
 {
-    IDirect3DDevice9 *device;
+    IDirect3DDevice9 *device, *device2;
     IDirect3D9 *d3d9;
     ULONG refcount;
-    HWND window;
+    HWND window, window2;
     HRESULT hr = D3D_OK;
     IDirect3DTexture9 *textures[20];
     unsigned int i;
     UINT vidmem_start, vidmem_end, diff;
 
     window = CreateWindowA("static", "d3d9_test", WS_OVERLAPPEDWINDOW,
+            0, 0, 640, 480, 0, 0, 0, 0);
+    window2 = CreateWindowA("static", "d3d9_test", WS_OVERLAPPEDWINDOW,
             0, 0, 640, 480, 0, 0, 0, 0);
     d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
     ok(!!d3d9, "Failed to create a D3D object.\n");
@@ -8266,6 +8268,43 @@ static void test_vidmem_accounting(void)
         if (textures[i])
             IDirect3DTexture9_Release(textures[i]);
     }
+
+    /* Multi-device testing */
+    if (!(device2 = create_device(d3d9, window2, NULL)))
+    {
+        skip("Failed to create a D3D device, skipping tests.\n");
+        refcount = IDirect3DDevice9_Release(device);
+        ok(!refcount, "Device has %u references left.\n", refcount);
+        IDirect3D9_Release(d3d9);
+        DestroyWindow(window2);
+        DestroyWindow(window);
+        return;
+    }
+
+     vidmem_start = IDirect3DDevice9_GetAvailableTextureMem(device);
+     memset(textures, 0, sizeof(textures));
+     for (i = 0; (i < sizeof(textures) / sizeof(*textures)) && SUCCEEDED(hr); i++)
+     {
+         hr = IDirect3DDevice9_CreateTexture(device2, 1024, 1024, 1, D3DUSAGE_RENDERTARGET,
+                 D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &textures[i], NULL);
+         /* D3DERR_OUTOFVIDEOMEMORY is returned when the card runs out of video memory
+          * E_FAIL is returned on address space or system memory exhaustion */
+         ok(SUCCEEDED(hr) || hr == D3DERR_OUTOFVIDEOMEMORY || hr == E_OUTOFMEMORY,
+                 "Failed to create texture, hr %#x.\n", hr);
+     }
+     vidmem_end = IDirect3DDevice9_GetAvailableTextureMem(device);
+
+     /* Windows 7 uses device private counters */
+     ok(vidmem_start > vidmem_end || broken(vidmem_start == vidmem_end), "Expected available texture memory to decrease during texture creation.\n");
+     diff = vidmem_start - vidmem_end;
+     ok(diff > 1024 * 1024 * 2 * i || broken(diff == 0), "Expected a video memory difference of at least %u MB, got %u MB.\n",
+             2 * i, diff / 1024 / 1024);
+
+     for (i = 0; i < sizeof(textures) / sizeof(*textures); i++)
+     {
+         if (textures[i])
+             IDirect3DTexture9_Release(textures[i]);
+     }
 
     refcount = IDirect3DDevice9_Release(device);
     ok(!refcount, "Device has %u references left.\n", refcount);
@@ -9987,6 +10026,7 @@ static void test_lost_device(void)
     HWND window;
     HRESULT hr;
     BOOL ret;
+    IDirect3DSwapChain9 *swapchain;
 
     window = CreateWindowA("static", "d3d9_test", WS_OVERLAPPEDWINDOW,
             0, 0, 640, 480, NULL, NULL, NULL, NULL);
@@ -10014,6 +10054,12 @@ static void test_lost_device(void)
     hr = IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL);
     ok(hr == D3DERR_DEVICELOST, "Got unexpected hr %#x.\n", hr);
 
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3DERR_DEVICELOST, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
+
     ret = ShowWindow(window, SW_RESTORE);
     ok(ret, "Failed to restore window.\n");
     ret = SetForegroundWindow(window);
@@ -10023,12 +10069,24 @@ static void test_lost_device(void)
     hr = IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL);
     ok(hr == D3DERR_DEVICELOST, "Got unexpected hr %#x.\n", hr);
 
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3DERR_DEVICELOST, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
+
     hr = reset_device(device, &device_desc);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
     hr = IDirect3DDevice9_TestCooperativeLevel(device);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
     hr = IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL);
     ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    ok(SUCCEEDED(hr), "Failed to get swapchain, hr %#x.\n", hr);
+    hr = IDirect3DSwapChain9_Present(swapchain, NULL, NULL, NULL, NULL, 0);
+    ok(hr == D3D_OK, "Got unexpected hr %#x.\n", hr);
+    IDirect3DSwapChain9_Release(swapchain);
 
     device_desc.flags = 0;
     hr = reset_device(device, &device_desc);
